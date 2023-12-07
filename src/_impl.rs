@@ -7,6 +7,7 @@ use std::{
 
 #[cfg(windows)]
 use fs_at::os::windows::{FileExt, OpenOptionsExt};
+use normpath::PathExt;
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 #[cfg(windows)]
@@ -32,7 +33,7 @@ impl super::RemoveDir for std::fs::File {
             None => PathComponents::Path(Path::new("")),
             Some(debug_root) => PathComponents::Path(debug_root),
         };
-        _remove_dir_contents::<OsIo>(self, &debug_root)
+        _remove_dir_contents::<OsIo>(self, &debug_root, false)
     }
 }
 
@@ -54,15 +55,15 @@ pub(crate) fn _ensure_empty_dir_path<I: io::Io, P: AsRef<Path>>(path: P) -> Resu
 }
 
 // Deprecated entry point
-pub(crate) fn _remove_dir_contents_path<I: io::Io, P: AsRef<Path>>(path: P) -> Result<()> {
+pub(crate) fn _remove_dir_contents_path<I: io::Io, P: AsRef<Path>>(path: P, ignore_self: bool) -> Result<()> {
     let mut d = I::open_dir(path.as_ref())?;
-    _remove_dir_contents::<I>(&mut d, &PathComponents::Path(path.as_ref()))
+    _remove_dir_contents::<I>(&mut d, &PathComponents::Path(path.as_ref()), ignore_self)
 }
 
 /// exterior lifetime interface to dir removal
-fn _remove_dir_contents<I: io::Io>(d: &mut File, debug_root: &PathComponents<'_>) -> Result<()> {
+fn _remove_dir_contents<I: io::Io>(d: &mut File, debug_root: &PathComponents<'_>, ignore_self: bool) -> Result<()> {
     let owned_handle = I::duplicate_fd(d)?;
-    remove_dir_contents_recursive::<I>(owned_handle, debug_root)?;
+    remove_dir_contents_recursive::<I>(owned_handle, debug_root, ignore_self)?;
     Ok(())
 }
 
@@ -72,7 +73,7 @@ pub(crate) fn remove_dir_all_path<I: io::Io, P: AsRef<Path>>(path: P) -> Result<
     // Opportunity 1 for races
     let d = I::open_dir(p)?;
     let debug_root = PathComponents::Path(if p.has_root() { p } else { Path::new(".") });
-    remove_dir_contents_recursive::<OsIo>(d, &debug_root)?;
+    remove_dir_contents_recursive::<OsIo>(d, &debug_root, false)?;
     // Opportunity 2 for races
     std::fs::remove_dir(&path)?;
     #[cfg(feature = "log")]
@@ -89,6 +90,7 @@ use self::path_components::PathComponents;
 fn remove_dir_contents_recursive<I: io::Io>(
     mut d: File,
     debug_root: &PathComponents<'_>,
+    ignore_self: bool,
 ) -> Result<File> {
     #[cfg(feature = "log")]
     log::trace!("scanning {}", &debug_root);
@@ -113,6 +115,7 @@ fn remove_dir_contents_recursive<I: io::Io>(
         }
         let dir_path = Path::new(name);
         let dir_debug_root = PathComponents::Component(debug_root, dir_path);
+
         #[cfg(windows)]
         {
             // On windows: open the file and then decide what to do with it.
@@ -122,22 +125,48 @@ fn remove_dir_contents_recursive<I: io::Io>(
             // race :/.
             opts.desired_access(DELETE | FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES);
             let mut child_file = opts.open_path_at(&dirfd, name)?;
-            let metadata = child_file.metadata()?;
-            let is_dir = metadata.is_dir();
-            let is_symlink = metadata.is_symlink();
-            if is_dir && !is_symlink {
-                remove_dir_contents_recursive::<I>(
-                    I::duplicate_fd(&mut child_file)?,
-                    &dir_debug_root,
-                )?;
+
+            let mut is_self = false;
+            if ignore_self {
+                let child_file_copy = I::duplicate_fd(&mut child_file)?;
+                let self_path = std::env::current_exe()?;
+                let self_handle = same_file::Handle::from_path(self_path.clone())?;
+                if same_file::Handle::from_file(child_file_copy)? == self_handle {
+                    let cur = format!("{}", dir_debug_root);
+                    let n1 = Path::new(&cur).normalize()?;
+                    let n2 = self_path.normalize()?;
+                    let p1 = n1.as_os_str().to_string_lossy();
+                    let p2 = n2.as_os_str().to_string_lossy();
+                    let is_eq = p1.eq_ignore_ascii_case(&p2);
+                    if is_eq {
+                        is_self = true;
+                    }
+                }
             }
-            #[cfg(feature = "log")]
-            log::trace!("delete: {}", &dir_debug_root);
-            child_file.delete_by_handle().map_err(|(_f, e)| {
+
+            if is_self {
                 #[cfg(feature = "log")]
-                log::debug!("error removing {}", dir_debug_root);
-                e
-            })?;
+                log::info!("skipped_self: {}", &dir_debug_root);
+            } else {
+                let metadata = child_file.metadata()?;
+                let is_dir = metadata.is_dir();
+                let is_symlink = metadata.is_symlink();
+                if is_dir && !is_symlink {
+                    remove_dir_contents_recursive::<I>(
+                        I::duplicate_fd(&mut child_file)?,
+                        &dir_debug_root,
+                        ignore_self.clone(),
+                    )?;
+                }
+                
+                #[cfg(feature = "log")]
+                log::trace!("delete: {}", &dir_debug_root);
+                child_file.delete_by_handle().map_err(|(_f, e)| {
+                    #[cfg(feature = "log")]
+                    log::debug!("error removing {}", dir_debug_root);
+                    e
+                })?;
+            }
         }
         #[cfg(not(windows))]
         {

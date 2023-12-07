@@ -21,13 +21,17 @@ repository = "https://github.com/XAMPPRocky/remove_dir_all.git"
 version = "0.8.2"
 
 [features]
-cli = ["dep:clap", "dep:env_logger", "log", "parallel"]
+cli = ["dep:clap", "dep:env_logger", "dep:simplelog", "log", "parallel"]
 default = []
 log = ["dep:log"]
 parallel = ["dep:rayon"]
 
 [[bin]]
 name = "remove-dir-all"
+required-features = ["cli"]
+
+[[bin]]
+name = "remove-current-dir"
 required-features = ["cli"]
 
 [dependencies]
@@ -38,6 +42,8 @@ fs_at = { version = "0.1.4" }
 log = { version = "0.4.11", optional = true }
 normpath = "1.0.1"
 rayon = { version = "1.4", optional = true }
+same-file = "1.0.6"
+simplelog = { version = "0.12", optional = true }
 
 [target.'cfg(windows)'.dependencies.windows-sys]
 features = [
