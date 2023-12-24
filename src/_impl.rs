@@ -185,7 +185,7 @@ fn remove_dir_contents_recursive<I: io::Io>(
                     let metadata = child_file.metadata()?;
                     let is_dir = metadata.is_dir();
                     if is_dir {
-                        remove_dir_contents_recursive::<I>(child_file, &dir_debug_root)?;
+                        remove_dir_contents_recursive::<I>(child_file, &dir_debug_root, ignore_self.clone())?;
                         #[cfg(feature = "log")]
                         log::trace!("rmdir: {}", &dir_debug_root);
                         let opts = fs_at::OpenOptions::default();
