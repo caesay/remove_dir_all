@@ -186,6 +186,15 @@ pub fn remove_dir_containing_current_executable() -> Result<()> {
     _impl::_remove_dir_contents_path::<_impl::OsIo, std::path::PathBuf>(me, true)
 }
 
+/// Deletes the contents of the specified directory.
+/// Does not delete the directory itself. It also does not delete the currently
+/// running executable. After this command, the only thing in the same directory
+/// as this executable, should be itself, if the executable is in that directory.
+pub fn remove_dir_but_not_self<P: AsRef<Path>>(path: P) -> Result<()> {
+    let buf = path.as_ref().to_path_buf();
+    _impl::_remove_dir_contents_path::<_impl::OsIo, std::path::PathBuf>(buf, true)
+}
+
 /// Reliably removes a directory and all of its children.
 ///
 /// ```rust
